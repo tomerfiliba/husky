@@ -9,16 +9,19 @@ import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Binary as BIN 
 import Data.Bits (Bits, bitSize, shiftR)
 import qualified Data.Map as Map
+import qualified Data.Char as Char 
 import Data.Map ((!))
+import qualified Numeric
+
 
 data PU a = PU { appP :: (a, LBS.ByteString) -> LBS.ByteString,
                  appU :: LBS.ByteString -> (a, LBS.ByteString) }
 
 pack :: PU a -> a -> LBS.ByteString
-pack p value = appP p (value, LBS.empty)
+pack pa value = appP pa (value, LBS.empty)
 
 unpack :: PU a -> LBS.ByteString -> a
-unpack p stream = fst (appU p stream)
+unpack pa stream = fst (appU pa stream)
 
 bytes :: Int64 -> PU LBS.ByteString
 bytes n = PU (uncurry LBS.append) (LBS.splitAt n)
@@ -38,17 +41,27 @@ int16  = primitive :: PU Int16
 int32  = primitive :: PU Int32
 int64  = primitive :: PU Int64
 
-const :: a -> PU a
-const x = PU snd (\s -> (x,s))
+lift :: a -> PU a
+lift x = PU snd (\s -> (x,s))
 
-sequ :: (b -> a) -> PU a -> (a -> PU b) -> PU b
-sequ f pa k = PU (\ (b,s) -> let a = f b
-                                 pb = k a
-                             in appP pa (a, appP pb (b,s)))
-                 (\ s -> let (a,s') = appU pa s
-                             pb = k a
-                         in appU pb s')
+pair :: PU a -> PU b -> PU (a,b)
+pair pa pb = PU (\((va,vb),s) -> let s' = appP pb (vb, s)
+                                 in appP pa (va, s'))
+                (\s -> let (va, s') = appU pa s
+                       in let (vb, s'') = appU pb s'
+                          in ((va, vb), s''))
 
+convert :: (a->b) -> (b->a) -> PU a -> PU b
+convert f f' pa = PU (\(vb, s) -> appP pa (f' vb, s))
+                     (\s -> let (va, s') = appU pa s
+                            in (f va, s'))
+
+repeat :: PU a -> Int -> PU [a]
+repeat pa 0 = lift []
+repeat pa n = convert (\(x,xs) -> (x:xs)) (\(x:xs) -> (x,xs)) (pair pa (repeat pa (n-1)))
+
+
+{-
 pair :: PU a -> PU b -> PU (a,b)
 pair pa pb = sequ fst pa (\ a ->
                sequ snd pb (\ b ->
@@ -101,6 +114,7 @@ reverseMap m = Map.fromList (map (\(x,y) -> (y,x)) (Map.toList m))
 
 symmMapping :: (Ord k, Ord v) => PU k -> Map.Map k v -> PU v
 symmMapping pa m = convert (\x -> m ! x) (\x -> (reverseMap m) ! x) pa
+-}
 
 {-
 instance monad PU where
@@ -116,23 +130,31 @@ crap = do
 data BMPVersion = BMPv1 | BMPv2 deriving (Eq, Ord, Show)
 
 
-
 main :: IO ()
 main = do
-    --LBS.putStrLn $ pack word32 65
+        p <- return $ pair word32 word16
+        c <- return $ convert (Char.chr . fromIntegral) (fromIntegral . Char.ord) word8
+        rc <- return $ repeat c
+        
+        print $ LBS.unpack $ pack p (65, 66)
+        print $ unpack p $ LBS.pack [0,0,0,1,0,2]
+        print $ pack c 'Z'
+        print $ unpack c $ LBS.pack [90]
+        print $ LBS.unpack $ pack (repeat word16 2) [13,14]
+    
     --LBS.putStrLn $ pack (fixedList word32 2) [65, 66, 67]
     --print $ unpack (fixedList word16 2) (LBS.pack [0, 65, 0, 66, 0, 67])
     --LBS.putStrLn $ pack (list word8) [65,66,67,68,69]
     --LBS.putStrLn $ pack ipv4 (IPv4 65 66 67 68)
     --print $ unpack ipv4 (LBS.pack [127, 0, 0, 1])
     
-    m <- return $ LBS.pack [65, 66, 67]
-    LBS.putStrLn $ pack (magic m) ()
-    print $ unpack (magic m) (LBS.pack [65, 66, 67, 68])  -- ()
+    --m <- return $ LBS.pack [65, 66, 67]
+    --LBS.putStrLn $ pack (magic m) ()
+    --print $ unpack (magic m) (LBS.pack [65, 66, 67, 68])  -- ()
     --print $ unpack (magic m) (LBS.pack [66, 67, 68, 69])  -- error "basa"
     
-    bmpver <- return $ word8 `symmMapping` (Map.fromList [(17, BMPv1), (31, BMPv2)])
-    print $ unpack bmpver (LBS.pack [31])
-    print $ pack bmpver BMPv1
+    --bmpver <- return $ word8 `symmMapping` (Map.fromList [(17, BMPv1), (31, BMPv2)])
+    --print $ unpack bmpver (LBS.pack [31])
+    --print $ pack bmpver BMPv1
 
 
