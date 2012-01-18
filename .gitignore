@@ -1,0 +1,6 @@
+.dist-buildwrapper
+.hsproject
+.project
+*.ho
+*.hi
+*.o
