@@ -1,0 +1,1 @@
+ghc Construct.hs && ./Construct
